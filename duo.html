@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Booth</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div id="lobby" class="w-full max-w-md bg-gray-800 p-6 rounded-lg shadow-lg text-center">
+        <h1 class="text-2xl font-bold text-green-400 mb-4">Booth :D</h1>
+        <p class="text-sm text-gray-400 mb-2">My ID: <span id="my-id" class="font-mono text-white font-bold">Loading...</span></p>
+        <div class="flex gap-2 mb-4">
+            <input type="text" id="remote-id" placeholder="Enter Others' ID" class="w-full bg-gray-700 text-white p-2 rounded outline-none">
+            <button id="connect-btn" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded font-bold">Connect</button>
+        </div>
+        <p id="status" class="text-sm text-gray-400">Waiting to connect...</p>
+    </div>
+
+    <div id="booth" class="hidden w-full max-w-4xl flex flex-col items-center">
+        <div class="flex gap-4 mb-4">
+            <div class="relative">
+                <span class="absolute top-2 left-2 bg-black/60 px-2 py-1 text-xs rounded">You</span>
+                <video id="local-video" autoplay muted playsinline class="w-[400px] bg-black rounded border-2 border-gray-700 transform -scale-x-100"></video>
+            </div>
+            <div class="relative">
+                <span class="absolute top-2 left-2 bg-black/60 px-2 py-1 text-xs rounded text-green-400">Others</span>
+                <video id="remote-video" autoplay playsinline class="w-[400px] bg-black rounded border-2 border-green-500"></video>
+            </div>
+        </div>
+        <div id="countdown" class="text-8xl font-black hidden"></div>
+    </div>
+
+    <div id="result" class="hidden flex flex-col items-center">
+        <canvas id="strip-canvas" class="mb-4 rounded shadow-2xl bg-white"></canvas>
+        <button id="download-btn" class="bg-blue-600 hover:bg-blue-500 px-6 py-3 rounded font-bold">Download Strip</button>
+    </div>
+
+    <canvas id="capture-canvas" class="hidden"></canvas>
+
+    <script>
+        const peer = new Peer("eid-cousin-" + Math.floor(Math.random() * 10000));
+        let conn;
+        let localStream;
+        let photosTaken = [];
+
+        // 1. Setup Camera & ID
+        peer.on('open', async (id) => {
+            document.getElementById('my-id').innerText = id;
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            document.getElementById('local-video').srcObject = localStream;
+        });
+
+        // 2. Handle Incoming Connections (If you call them)
+        peer.on('connection', c => {
+            conn = c;
+            setupDataHandlers();
+        });
+        peer.on('call', call => {
+            call.answer(localStream);
+            call.on('stream', stream => setupRemoteVideo(stream));
+        });
+
+        // 3. Connect Outbound (If they call you)
+        document.getElementById('connect-btn').onclick = () => {
+            const remoteId = document.getElementById('remote-id').value;
+            if (!remoteId) return;
+            conn = peer.connect(remoteId);
+            setupDataHandlers();
+            const call = peer.call(remoteId, localStream);
+            call.on('stream', stream => setupRemoteVideo(stream));
+        };
+
+        function setupRemoteVideo(stream) {
+            document.getElementById('remote-video').srcObject = stream;
+            document.getElementById('lobby').classList.add('hidden');
+            document.getElementById('booth').classList.remove('hidden');
+            document.getElementById('status').innerText = "Connected!";
+        }
+
+        function setupDataHandlers() {
+            conn.on('data', data => {
+                if (data.type === 'start-session') runSequence(data.count);
+            });
+        }
+
+        // 4. Capture & Sync Logic
+        async function runSequence(count) {
+            const cd = document.getElementById('countdown');
+            cd.classList.remove('hidden');
+            photosTaken = [];
+
+            for (let i = 0; i < count; i++) {
+                for (let s = 3; s > 0; s--) {
+                    cd.innerText = s;
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                cd.innerText = "📸";
+                captureSideBySide();
+                await new Promise(r => setTimeout(r, 500));
+            }
+            cd.classList.add('hidden');
+            generateStrip();
+        }
+
+        function captureSideBySide() {
+            const canvas = document.getElementById('capture-canvas');
+            const ctx = canvas.getContext('2d');
+            const lv = document.getElementById('local-video');
+            const rv = document.getElementById('remote-video');
+            
+            canvas.width = 1280; 
+            canvas.height = 480;
+
+            // Draw Them (Left side of final image)
+            ctx.drawImage(rv, 0, 0, 640, 480);
+
+            // Draw Me (Right side, Mirrored)
+            ctx.save();
+            ctx.translate(1280, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(lv, 0, 0, 640, 480);
+            ctx.restore();
+
+            photosTaken.push(canvas.toDataURL('image/jpeg', 0.9));
+        }
+
+        function generateStrip() {
+            const canvas = document.getElementById('strip-canvas');
+            const ctx = canvas.getContext('2d');
+            const pad = 20; const w = 600; const h = 225;
+            
+            canvas.width = w + (pad * 2);
+            canvas.height = (h * photosTaken.length) + (pad * (photosTaken.length + 1)) + 120;
+            ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            photosTaken.forEach((src, i) => {
+                const img = new Image();
+                img.src = src;
+                img.onload = () => {
+                    ctx.drawImage(img, pad, pad + (i * (h + pad)), w, h);
+                    if (i === photosTaken.length - 1) finishStrip(ctx, canvas);
+                };
+            });
+        }
+
+        function finishStrip(ctx, canvas) {
+            ctx.fillStyle = "#064e3b";
+            ctx.fillRect(0, canvas.height - 100, canvas.width, 100);
+            ctx.fillStyle = "#fbbf24";
+            ctx.textAlign = "center";
+            ctx.font = "bold 30px sans-serif";
+            ctx.fillText("Selamat Idul Fitri", canvas.width / 2, canvas.height - 55);
+            ctx.font = "16px sans-serif";
+            ctx.fillText("1447H • Bersama Walau Jauh", canvas.width / 2, canvas.height - 25);
+
+            document.getElementById('booth').classList.add('hidden');
+            document.getElementById('result').classList.remove('hidden');
+        }
+
+        document.getElementById('download-btn').onclick = () => {
+            const link = document.createElement('a');
+            link.download = `eid-strip-${Date.now()}.jpg`;
+            link.href = document.getElementById('strip-canvas').toDataURL();
+            link.click();
+        };
+    </script>
+</body>
+</html>
