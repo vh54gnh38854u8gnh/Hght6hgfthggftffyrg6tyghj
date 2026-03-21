@@ -66,26 +66,30 @@
     }
 
     async function startCousinCamera(deviceId = null) {
-        if (localStream) localStream.getTracks().forEach(t => t.stop());
-        localStream = await navigator.mediaDevices.getUserMedia({
-            video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "user" }
-        });
-        document.getElementById('local-video').srcObject = localStream;
-
-        // Replace track so host never freezes
-        if (activeCall && activeCall.peerConnection) {
-            const sender = activeCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-            if (sender) await sender.replaceTrack(localStream.getVideoTracks()[0]);
-        }
-    }
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: deviceId 
+                    ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } } 
+                    : { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } }
+            });
+            document.getElementById('local-video').srcObject = localStream;
+    
+            if (activeCall && activeCall.peerConnection) {
+                const sender = activeCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                if (sender) await sender.replaceTrack(localStream.getVideoTracks()[0]);
+            }
+        }
 
     // ====================== PEER SETUP ======================
     peer.on('open', async (id) => {
-        document.getElementById('my-id').innerText = id;
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        document.getElementById('local-video').srcObject = localStream;
-        await populateCousinCameras();
-    });
+            document.getElementById('my-id').innerText = id;
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "user", width: { ideal: 1920 }, height: { ideal: 1080 } }, 
+                audio: false 
+            });
+            document.getElementById('local-video').srcObject = localStream;
+            await populateCousinCameras();
+        });
 
     peer.on('connection', c => { conn = c; setupDataHandlers(); });
 
@@ -137,58 +141,102 @@
         generateStrip();
     }
 
-    function captureSideBySide() {
-        const canvas = document.getElementById('capture-canvas');
-        const ctx = canvas.getContext('2d');
-        const lv = document.getElementById('local-video');
-        const rv = document.getElementById('remote-video');
-        canvas.width = 1280; canvas.height = 480;
-        ctx.drawImage(rv, 0, 0, 640, 480); // left = cousin (host)
-        ctx.save();
-        ctx.translate(1280, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(lv, 0, 0, 640, 480); // right = you mirrored
-        ctx.restore();
-        photosTaken.push(canvas.toDataURL('image/jpeg', 0.9));
-    }
+    function drawVideoCover(ctx, video, x, y, w, h, flip = false) {
+            if (!video.videoWidth) return;
+            const vidRatio = video.videoWidth / video.videoHeight;
+            const targetRatio = w / h;
+            let drawW = w, drawH = h;
+    
+            if (vidRatio > targetRatio) drawW = h * vidRatio;
+            else drawH = w / vidRatio;
+    
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x, y, w, h);
+            ctx.clip();
+    
+            ctx.translate(x + w / 2, y + h / 2);
+            if (flip) ctx.scale(-1, 1);
+            ctx.drawImage(video, -drawW / 2, -drawH / 2, drawW, drawH);
+            ctx.restore();
+        }
+    
+        function captureSideBySide() {
+            const canvas = document.getElementById('capture-canvas');
+            const ctx = canvas.getContext('2d');
+            const lv = document.getElementById('local-video'); // You
+            const rv = document.getElementById('remote-video'); // Host
+    
+            const isDuo = rv && rv.srcObject;
+    
+            if (isDuo) {
+                canvas.width = 3840; 
+                canvas.height = 1080;
+                drawVideoCover(ctx, rv, 0, 0, 1920, 1080, false); // Host on Left
+                drawVideoCover(ctx, lv, 1920, 0, 1920, 1080, true);  // You on Right (mirrored)
+            } else {
+                canvas.width = 1920;
+                canvas.height = 1080;
+                drawVideoCover(ctx, lv, 0, 0, 1920, 1080, true); // You only (mirrored)
+            }
+    
+            photosTaken.push(canvas.toDataURL('image/jpeg', 1.0)); // 1.0 Max Quality
+        }
 
     function generateStrip() {
-        const canvas = document.getElementById('strip-canvas');
-        const ctx = canvas.getContext('2d');
-        const pad = 20, w = 600, h = 225;
-        canvas.width = w + pad * 2;
-        canvas.height = (h * photosTaken.length) + pad * (photosTaken.length + 1) + 120;
-        ctx.fillStyle = "white"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        photosTaken.forEach((src, i) => {
-            const img = new Image();
-            img.src = src;
-            img.onload = () => {
-                ctx.drawImage(img, pad, pad + (i * (h + pad)), w, h);
-                if (i === photosTaken.length - 1) finishStrip(ctx, canvas);
-            };
-        });
-    }
-
-    function finishStrip(ctx, canvas) {
-        ctx.fillStyle = "#064e3b";
-        ctx.fillRect(0, canvas.height - 100, canvas.width, 100);
-        ctx.fillStyle = "#fbbf24";
-        ctx.textAlign = "center";
-        ctx.font = "bold 30px sans-serif";
-        ctx.fillText("Selamat Idul Fitri", canvas.width / 2, canvas.height - 55);
-        ctx.font = "16px sans-serif";
-        ctx.fillText("1447H", canvas.width / 2, canvas.height - 25);
-        document.getElementById('booth').classList.add('hidden');
-        document.getElementById('result').classList.remove('hidden');
-    }
-
-    document.getElementById('download-btn').onclick = () => {
-        const link = document.createElement('a');
-        link.download = `eid-strip-${Date.now()}.jpg`;
-        link.href = document.getElementById('strip-canvas').toDataURL();
-        link.click();
-    };
+            const canvas = document.getElementById('strip-canvas');
+            const ctx = canvas.getContext('2d');
+            const pad = 60, pw = 1800, banner = 350;
+    
+            const promises = photosTaken.map((src, i) => new Promise(res => {
+                const img = new Image();
+                img.onload = () => res({ img, index: i });
+                img.src = src;
+            }));
+    
+            Promise.all(promises).then(results => {
+                results.sort((a, b) => a.index - b.index);
+                const images = results.map(r => r.img);
+    
+                const aspectRatio = images[0].height / images[0].width;
+                const ph = pw * aspectRatio; 
+    
+                canvas.width = pw + pad * 2;
+                canvas.height = (ph * images.length) + pad * (images.length + 1) + banner;
+    
+                ctx.fillStyle = "white"; 
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+                images.forEach((img, i) => {
+                    ctx.drawImage(img, pad, pad + i * (ph + pad), pw, ph);
+                });
+    
+                finishStrip(ctx, canvas, banner);
+            });
+        }
+    
+        function finishStrip(ctx, canvas, banner) {
+            const by = canvas.height - banner;
+            ctx.fillStyle = "#064e3b";
+            ctx.fillRect(0, by, canvas.width, banner);
+            
+            ctx.fillStyle = "#fbbf24";
+            ctx.textAlign = "center";
+            ctx.font = "bold 100px sans-serif";
+            ctx.fillText("Selamat Idul Fitri", canvas.width / 2, by + 150);
+            ctx.font = "60px sans-serif";
+            ctx.fillText("1447H", canvas.width / 2, by + 250);
+            
+            document.getElementById('booth').classList.add('hidden');
+            document.getElementById('result').classList.remove('hidden');
+        }
+    
+        document.getElementById('download-btn').onclick = () => {
+            const link = document.createElement('a');
+            link.download = `eid-strip-${Date.now()}.jpg`;
+            link.href = document.getElementById('strip-canvas').toDataURL('image/jpeg', 1.0); // Output 1.0 Max Quality
+            link.click();
+        };
 
     // ====================== COUSIN CAMERA SWITCH ======================
     document.getElementById('cousin-switch-camera-button').addEventListener('click', () => {
